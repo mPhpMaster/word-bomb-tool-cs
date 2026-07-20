@@ -1,0 +1,19 @@
+<Window x:Class="WordBombTool.Views.RegionSelectorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="#66000000"
+        ShowInTaskbar="False"
+        Topmost="True"
+        ResizeMode="NoResize"
+        WindowStartupLocation="Manual"
+        Cursor="Cross"
+        Focusable="True">
+    <Canvas x:Name="RootCanvas" Background="Transparent">
+        <Rectangle x:Name="SelectionRect"
+                   Stroke="#61afef" StrokeThickness="2"
+                   Fill="#1461afef"
+                   Visibility="Collapsed"/>
+    </Canvas>
+</Window>

@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Platforms>x64</Platforms>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>WordBombGUI</AssemblyName>
+    <RootNamespace>WordBombTool</RootNamespace>
+    <ApplicationIcon>Resources\appicon.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- NOT InvariantGlobalization: WPF's text layout engine (font fallback /
+         shaping via MS.Internal.FontCache.MajorLanguages) needs real ICU/NLS
+         data and throws on every text render without it. -->
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <!-- Publish as a single self-contained file: see PUBLISH.md / build script. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Resources\appicon.png" />
+    <Resource Include="Resources\appicon.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WordBombTool.Core\WordBombTool.Core.csproj" />
+  </ItemGroup>
+
+  <!-- UseWPF + UseWindowsForms together (needed for the NotifyIcon tray icon)
+       makes the SDK add implicit global usings for both System.Windows.* and
+       System.Windows.Forms/System.Drawing, which collide on several type names
+       (Application, MessageBox, Point, Color, KeyEventArgs, MouseEventArgs...).
+       Drop the WinForms/GDI+ globals; the few files that need them (MainWindow's
+       tray icon, the OCR image pipeline) import them explicitly instead. -->
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+</Project>

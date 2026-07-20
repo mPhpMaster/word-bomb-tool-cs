@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>WordBombTool</RootNamespace>
+    <!-- Platform-agnostic logic shared by the GUI and CLI: config/theme
+         constants, the Datamuse client, suggestion sort/pick logic, and the
+         OCR image-preprocessing pipeline. Nothing here touches WPF, WinForms,
+         or Win32, which keeps it unit-testable without a Windows-only target. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Drawing.Common" Version="8.0.10" />
+  </ItemGroup>
+
+</Project>

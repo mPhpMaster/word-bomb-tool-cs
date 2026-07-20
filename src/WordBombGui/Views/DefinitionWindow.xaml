@@ -1,0 +1,19 @@
+<Window x:Class="WordBombTool.Views.DefinitionWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Definition"
+        Width="680" Height="520"
+        MinWidth="640" MinHeight="480"
+        Background="#282c34"
+        FontFamily="Consolas" FontSize="15"
+        WindowStartupLocation="CenterOwner">
+    <DockPanel Margin="8">
+        <Button x:Name="CloseButton" Content="Close" DockPanel.Dock="Bottom"
+                Width="90" Height="28" Margin="0,8,0,0" HorizontalAlignment="Right"
+                Click="OnCloseClick" IsDefault="True" IsCancel="True"/>
+        <TextBox x:Name="DefinitionText" IsReadOnly="True" TextWrapping="Wrap"
+                 VerticalScrollBarVisibility="Auto"
+                 Background="#21252b" Foreground="#abb2bf" BorderThickness="1" BorderBrush="#3e4452"
+                 Padding="6"/>
+    </DockPanel>
+</Window>

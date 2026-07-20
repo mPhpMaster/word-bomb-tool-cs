@@ -1,0 +1,45 @@
+# .NET / Visual Studio build output
+bin/
+obj/
+out/
+*.user
+*.userosscache
+*.sln.docstates
+*.suo
+
+# Visual Studio / Rider / VS Code
+.vs/
+.vscode/
+.idea/
+*.DotSettings.user
+
+# Publish/distribution output
+dist/
+
+# Test results
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coveragexml
+
+# NuGet
+*.nupkg
+**/packages/*
+!**/packages/build/
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# Inno Setup compiler output (kept out of dist/ too, just in case)
+*.iss.bak
+
+# App-generated runtime files (written next to the exe when run from a
+# build/publish output dir inside the repo during local testing)
+ocr_config.json
+ocr_metrics.json
+ocr_helper.log*
+tesseract_installer.exe
+
+# OS cruft
+Thumbs.db
+.DS_Store

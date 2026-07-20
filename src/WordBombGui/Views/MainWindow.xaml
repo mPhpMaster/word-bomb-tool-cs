@@ -1,0 +1,33 @@
+<Window x:Class="WordBombTool.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="WBT"
+        Left="10" Top="10" Width="750" Height="350"
+        Background="#282c34"
+        Icon="pack://application:,,,/Resources/appicon.ico"
+        FontFamily="Consolas" FontSize="13">
+    <DockPanel LastChildFill="True">
+        <Menu DockPanel.Dock="Top" Background="#282c34" Foreground="#abb2bf">
+            <MenuItem Header="_File" Foreground="#abb2bf">
+                <MenuItem x:Name="MenuExit" Header="Exit" Click="OnExitClick"/>
+            </MenuItem>
+            <MenuItem x:Name="OptionsMenu" Header="_Options" Foreground="#abb2bf"/>
+            <MenuItem Header="_Help" Foreground="#abb2bf">
+                <MenuItem Header="Show Hotkeys" InputGestureText="." Click="OnShowHelpClick"/>
+            </MenuItem>
+        </Menu>
+        <RichTextBox x:Name="LogBox"
+                     IsReadOnly="True"
+                     IsDocumentEnabled="False"
+                     VerticalScrollBarVisibility="Auto"
+                     HorizontalScrollBarVisibility="Disabled"
+                     Background="#21252b" Foreground="#98c379"
+                     BorderThickness="0" Padding="4">
+            <RichTextBox.Resources>
+                <Style TargetType="Paragraph">
+                    <Setter Property="Margin" Value="0,0,0,2"/>
+                </Style>
+            </RichTextBox.Resources>
+        </RichTextBox>
+    </DockPanel>
+</Window>
