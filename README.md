@@ -18,6 +18,13 @@ API](https://api.datamuse.com/words), and auto-types them for you.
 > the original concept, design, and implementation goes to that project;
 > please go star/support it too.
 
+## Screenshot
+
+![Main window](docs/screenshots/main-window.png)
+
+*The main log window on startup — colored log lines (green for info, yellow
+for prompts), current search/sort mode, typing delay, and OCR poll interval.*
+
 ## Features
 
 - **Screen-region OCR** — reads letters from a user-selected screen region
