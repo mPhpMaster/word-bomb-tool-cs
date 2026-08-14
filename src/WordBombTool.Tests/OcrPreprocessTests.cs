@@ -54,6 +54,41 @@ public class OcrPreprocessTests
     }
 
     [Fact]
+    public void ToGray_DoesNotDisposeCallersBitmap()
+    {
+        // Regression: ToGray used to take `using var bmp = ... ? src : clone`, which
+        // disposed the caller's bitmap whenever src was already 32bppArgb. The OCR
+        // pipeline reuses the same bitmap for the soft and hard passes, so this
+        // killed the auto-mode thread the first time a region OCR'd as empty.
+        using var src = new Bitmap(20, 10, PixelFormat.Format32bppArgb);
+        using (var g = Graphics.FromImage(src)) g.Clear(Color.FromArgb(200, 200, 200));
+
+        OcrPreprocess.ToGray(src);
+
+        // Throws ObjectDisposedException / ArgumentException if src was disposed.
+        Assert.Equal(20, src.Width);
+        Assert.Equal(10, src.Height);
+
+        // And the bitmap must still be usable for a second pass.
+        var second = OcrPreprocess.ToGray(src);
+        Assert.Equal(20, second.Width);
+    }
+
+    [Fact]
+    public void ToGray_NonArgbInput_StillProducesCorrectSize()
+    {
+        // The clone path (src not 32bppArgb) must keep working after the fix.
+        using var src = new Bitmap(16, 8, PixelFormat.Format24bppRgb);
+        using (var g = Graphics.FromImage(src)) g.Clear(Color.FromArgb(10, 10, 10));
+
+        var gray = OcrPreprocess.ToGray(src);
+
+        Assert.Equal(16, gray.Width);
+        Assert.Equal(8, gray.Height);
+        Assert.Equal(16, src.Width); // caller's bitmap survives here too
+    }
+
+    [Fact]
     public void Otsu_SeparatesBimodalHistogram()
     {
         var g = new GrayImage(100, 1);

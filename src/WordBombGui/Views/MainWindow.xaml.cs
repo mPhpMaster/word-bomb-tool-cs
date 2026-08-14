@@ -20,6 +20,9 @@ public partial class MainWindow : Window
     private readonly Callbacks _cb;
     private readonly Action<bool>? _onVisibility;
     private Forms.NotifyIcon? _tray;
+    // Held so it can be disposed with the tray -- NotifyIcon does not own its Icon,
+    // so letting this go unreferenced leaks the GDI handle for the process lifetime.
+    private Icon? _trayIcon;
     private DispatcherTimer? _drainTimer;
     private int _tick;
     private bool _closingForReal;
@@ -107,11 +110,17 @@ public partial class MainWindow : Window
         try
         {
             using var stream = Application.GetResourceStream(new Uri("Resources/appicon.ico", UriKind.Relative))?.Stream;
-            var icon = stream != null ? new Icon(stream) : SystemIcons.Application;
+            // Ask for the shell's small-icon size explicitly. new Icon(stream) best-fits
+            // to SM_CXICON (32x32), which the shell then downscales into the 16x16
+            // notification slot -- picking the right frame up front keeps it crisp.
+            if (stream != null)
+            {
+                _trayIcon = new Icon(stream, Forms.SystemInformation.SmallIconSize);
+            }
 
             var tray = new Forms.NotifyIcon
             {
-                Icon = icon,
+                Icon = _trayIcon ?? SystemIcons.Application,
                 Text = "WBT",
                 Visible = true,
             };
@@ -199,11 +208,26 @@ public partial class MainWindow : Window
     /// <summary>Runs f on the UI thread (mirrors walk's Synchronize).</summary>
     public void Synchronize(Action f) => Dispatcher.Invoke(f);
 
+    /// <summary>Queues f on the UI thread without waiting for it to finish. Use this
+    /// instead of <see cref="Synchronize"/> when f shows a modal dialog: Invoke would
+    /// block the calling worker until the user closes it, and workers hold one of only
+    /// AppConfig.MaxWorkerThreads semaphore permits.</summary>
+    public void SynchronizeAsync(Action f) => Dispatcher.BeginInvoke(f);
+
     public void DisposeAll()
     {
-        _drainTimer?.Stop();
-        if (_tray != null) { _tray.Visible = false; _tray.Dispose(); }
-        _closingForReal = true;
-        Dispatcher.Invoke(Close);
+        // NotifyIcon is a WinForms component bound to the thread that created it (the
+        // UI thread), but GracefulExit reaches here from a thread-pool thread for the
+        // Ctrl+Shift+Q hotkey and the window's X button. Marshal the whole teardown
+        // rather than touching the tray cross-thread.
+        Dispatcher.Invoke(() =>
+        {
+            _drainTimer?.Stop();
+            if (_tray != null) { _tray.Visible = false; _tray.Dispose(); _tray = null; }
+            _trayIcon?.Dispose();
+            _trayIcon = null;
+            _closingForReal = true;
+            Close();
+        });
     }
 }

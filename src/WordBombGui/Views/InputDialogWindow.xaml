@@ -6,6 +6,8 @@
         SizeToContent="Height"
         Background="#282c34"
         FontFamily="Consolas" FontSize="13"
+        Icon="pack://application:,,,/Resources/appicon.ico"
+        ShowInTaskbar="False"
         WindowStartupLocation="CenterOwner"
         ResizeMode="NoResize">
     <StackPanel Margin="14">

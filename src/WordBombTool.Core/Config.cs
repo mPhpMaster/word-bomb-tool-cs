@@ -56,7 +56,13 @@ public static class AppConfig
     public const double OCRInterval = 0.5;
     public const double OCRIntervalMin = 0.1;
     public const double OCRIntervalMax = 10.0;
-    public const int OCRTimeoutSeconds = 1; // also used as the Datamuse HTTP timeout
+    public const int OCRTimeoutSeconds = 1;
+
+    // Deliberately NOT OCRTimeoutSeconds. One second has to cover DNS + TCP + TLS +
+    // request + response to api.datamuse.com; on a cold connection or any link with
+    // >250ms RTT that expires routinely, and the user just sees an empty suggestion
+    // list that looks identical to "no words match these letters".
+    public const int ApiTimeoutSeconds = 8;
 
     public const double TypingDelay = 0.28;
     public const double TypingDelayMin = 0.01;
@@ -64,6 +70,23 @@ public static class AppConfig
 
     public const string TurnGateNeedYour = "your";
     public const string TurnGateNeedTurn = "turn";
+
+    /// <summary>True when OCR'd turn-box text indicates it is actually the player's
+    /// turn. <paramref name="text"/> is expected to be already normalised (lowercase,
+    /// whitespace stripped) by the OCR layer.</summary>
+    /// <remarks>
+    /// This used to end with `|| (hasYour &amp;&amp; text.Length >= 4)`. That clause was
+    /// always true whenever hasYour was — "your" is itself 4 characters — so the whole
+    /// expression collapsed to a bare Contains("your"), and auto mode would fire on any
+    /// stray "your"/"yours"/"your move" picked up from chat or adjacent UI. Requiring
+    /// both words (or the run-together "yourturn") is the behaviour that was intended.
+    /// </remarks>
+    public static bool TurnGateAccepts(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return false;
+        if (text.Contains("yourturn")) return true;
+        return text.Contains(TurnGateNeedYour) && text.Contains(TurnGateNeedTurn);
+    }
 
     public static double ClampOCRInterval(double v)
     {

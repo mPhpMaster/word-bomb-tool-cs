@@ -39,8 +39,6 @@ for prompts), current search/sort mode, typing delay, and OCR poll interval.*
 - **Region overlays** — a visible border around the selected screen region.
 - **System tray integration** — minimize to tray, quick actions from the
   tray menu.
-- **A GUI-less CLI** (`WordBombCLI.exe`) for `suggest` / `define` / `modes`
-  without the OCR/hotkey machinery, useful for scripting or quick lookups.
 
 ## Requirements
 
@@ -58,8 +56,8 @@ for prompts), current search/sort mode, typing delay, and OCR poll interval.*
 
 **Easiest:** grab `WordBombTool-Setup.exe` from the
 [Releases](../../releases) page and run it. It installs the app, adds Start
-Menu / optional desktop shortcuts, an optional "add CLI to PATH" task, and a
-clean uninstaller — no admin rights or separate runtime install required.
+Menu / optional desktop shortcuts, and a clean uninstaller — no admin rights
+or separate runtime install required.
 
 **From source:** see [Building](#building-and-testing) below.
 
@@ -100,7 +98,6 @@ word-bomb-tool-cs/
     │                              # suggestion sort/pick, OCR preprocessing
     │                              # (net8.0, no WPF/WinForms/Win32 deps)
     ├── WordBombGui/                # the desktop app (net8.0-windows, WPF)
-    ├── WordBombCli/                # the GUI-less CLI (net8.0, console)
     └── WordBombTool.Tests/         # xUnit unit tests
 ```
 
@@ -119,7 +116,7 @@ dotnet test .\src\WordBombTool.Tests\WordBombTool.Tests.csproj -c Release
 `dist\`:
 
 ```powershell
-.\publish.ps1                              # all 3 variants, GUI + CLI
+.\publish.ps1                              # all 3 GUI variants
 .\publish.ps1 -SkipTests                   # skip tests for a faster loop
 .\publish.ps1 -Variant SelfContainedR2R    # just one variant
 ```

@@ -14,7 +14,7 @@ public sealed class DatamuseClient
 
     public DatamuseClient()
     {
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(AppConfig.OCRTimeoutSeconds) };
+        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(AppConfig.ApiTimeoutSeconds) };
         _baseUrl = AppConfig.DatamuseAPI;
         _status = AppConfig.StatusOnline;
     }
@@ -95,7 +95,7 @@ public sealed class DatamuseClient
     {
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(AppConfig.OCRTimeoutSeconds));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(AppConfig.ApiTimeoutSeconds));
             var url = _baseUrl + "?" + q.ToString();
             var resp = _http.GetAsync(url, cts.Token).GetAwaiter().GetResult();
             if (!resp.IsSuccessStatusCode)

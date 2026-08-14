@@ -61,23 +61,52 @@ public sealed class AppController
         }
     };
 
-    // ---- turn gate ------------------------------------------------------------
+    // ---- instrumented wrappers ------------------------------------------------
+    // AppState.RecordOCRAttempt / RecordAPICall existed but had no callers anywhere,
+    // so ocr_metrics.json was written with all-zero counters on every exit. These
+    // wrappers are the missing call sites; route OCR and API traffic through them.
 
-    private static bool TurnGateAccepts(string text)
+    private (string letters, bool ok) TimedOcr(Region region)
     {
-        if (string.IsNullOrEmpty(text)) return false;
-        var hasYour = text.Contains(AppConfig.TurnGateNeedYour);
-        var hasTurn = text.Contains(AppConfig.TurnGateNeedTurn);
-        return (hasYour && hasTurn) || text.Contains("yourturn") || (hasYour && text.Length >= 4);
+        var sw = Stopwatch.StartNew();
+        var result = _ocr.PerformOCR(region);
+        _state.RecordOCRAttempt(result.ok, sw.Elapsed.TotalMilliseconds);
+        return result;
     }
+
+    private string TimedOcrTurnGate(Region region)
+    {
+        var sw = Stopwatch.StartNew();
+        var text = _ocr.PerformOCRTurnGate(region);
+        _state.RecordOCRAttempt(text != "", sw.Elapsed.TotalMilliseconds);
+        return text;
+    }
+
+    private List<string> TimedSuggestions(string letters, string mode)
+    {
+        var sw = Stopwatch.StartNew();
+        var result = _api.Suggestions(letters, mode);
+        _state.RecordAPICall(_api.Status() == AppConfig.StatusOnline, sw.Elapsed.TotalMilliseconds);
+        return result;
+    }
+
+    private List<string> TimedDefinitions(string word)
+    {
+        var sw = Stopwatch.StartNew();
+        var result = _api.Definitions(word);
+        _state.RecordAPICall(_api.Status() == AppConfig.StatusOnline, sw.Elapsed.TotalMilliseconds);
+        return result;
+    }
+
+    // ---- turn gate ------------------------------------------------------------
 
     private (bool ok, string text) AutoModeTurnOK()
     {
         var s = _state.Snapshot();
         if (s.TurnRegion == null) return (true, "");
-        var text = _ocr.PerformOCRTurnGate(s.TurnRegion);
+        var text = TimedOcrTurnGate(s.TurnRegion);
         if (text == "") return (false, "");
-        return (TurnGateAccepts(text), text);
+        return (AppConfig.TurnGateAccepts(text), text);
     }
 
     // ---- display text -----------------------------------------------------
@@ -126,6 +155,11 @@ public sealed class AppController
     {
         var s = _state.Snapshot();
         var resumeAuto = false;
+        // Snapshot the intent generation alongside the decision to suspend. If the user
+        // hits F1 while the word is still being typed, ToggleAutoMode bumps the
+        // generation and the resume below is skipped -- previously the stale capture
+        // silently turned auto mode back on seconds after they switched it off.
+        var intent = Volatile.Read(ref _autoIntentGeneration);
         if (s.AutoModeActive)
         {
             _state.SetAutoModeActive(false);
@@ -135,14 +169,23 @@ public sealed class AppController
         {
             Log("Cannot perform WBT: No region selected.", LogLevel.Error);
             SelectRegion();
-            if (resumeAuto) _state.SetAutoModeActive(true);
+            ResumeAutoIfStillIntended(resumeAuto, intent);
             return;
         }
         Submit(() =>
         {
             try { HandleShiftAsync("shift"); }
-            finally { if (resumeAuto) _state.SetAutoModeActive(true); }
+            finally { ResumeAutoIfStillIntended(resumeAuto, intent); }
         });
+    }
+
+    /// <summary>Restores auto mode after a shift-triggered suspension, unless the user
+    /// explicitly toggled it in the meantime (tracked by _autoIntentGeneration).</summary>
+    private void ResumeAutoIfStillIntended(bool resumeAuto, int intentAtSuspend)
+    {
+        if (!resumeAuto) return;
+        if (Volatile.Read(ref _autoIntentGeneration) != intentAtSuspend) return;
+        _state.SetAutoModeActive(true);
     }
 
     private void HandleShiftAsync(string typingSource)
@@ -151,7 +194,7 @@ public sealed class AppController
         if (s.Region == null) return;
 
         Log("Processing WBT...", LogLevel.Info);
-        var (letters, ok) = _ocr.PerformOCR(s.Region);
+        var (letters, ok) = TimedOcr(s.Region);
         if (!ok || letters == "")
         {
             Log("WBT returned no characters.", LogLevel.Warning);
@@ -170,7 +213,7 @@ public sealed class AppController
         _state.SetLastOcrText(letters);
         Log($"--- WBT: {letters} ---", LogLevel.Info);
 
-        var suggestions = _api.Suggestions(letters, mode);
+        var suggestions = TimedSuggestions(letters, mode);
         _state.SetApiStatus(_api.Status());
 
         if (suggestions.Count > 0)
@@ -187,6 +230,11 @@ public sealed class AppController
         else
         {
             _state.SetSuggestions(new List<string>(), 0);
+            // Distinguish "the API didn't answer" from "the API has no words for these
+            // letters" -- both used to surface as a bare "No suggestions loaded."
+            var status = _api.Status();
+            if (status != AppConfig.StatusOnline)
+                Log($"No suggestions: API {status} (letters: '{letters}').", LogLevel.Warning);
         }
 
         TypeNextWord(typingSource);
@@ -243,14 +291,14 @@ public sealed class AppController
         if (s.Region == null) return;
 
         Log("Processing WBT...", LogLevel.Info);
-        var (word, ok) = _ocr.PerformOCR(s.Region);
+        var (word, ok) = TimedOcr(s.Region);
         if (!ok || word == "")
         {
             Log("WBT returned no definitions.", LogLevel.Warning);
             return;
         }
 
-        var defs = _api.Definitions(word);
+        var defs = TimedDefinitions(word);
         _state.SetApiStatus(_api.Status());
 
         if (defs.Count > 0)
@@ -265,7 +313,10 @@ public sealed class AppController
         }
 
         Log($"Showing definition for: '{word}'", LogLevel.Info);
-        _logWin?.Synchronize(() => DefinitionWindow.Show(_logWin, word, defs));
+        // BeginInvoke, not Invoke: DefinitionWindow.Show is modal, and this runs on a
+        // worker holding one of only MaxWorkerThreads permits. Blocking here until the
+        // user closes the window would starve typing entirely.
+        _logWin?.SynchronizeAsync(() => DefinitionWindow.Show(_logWin, word, defs));
     }
 
     // ---- region selection ------------------------------------------------------
@@ -388,6 +439,11 @@ public sealed class AppController
 
     private void ToggleAutoMode()
     {
+        // Any explicit user toggle invalidates a pending "resume after shift" (see
+        // HandleShiftPress): whatever the user just chose must win over a decision
+        // captured seconds ago, before the word finished typing.
+        Interlocked.Increment(ref _autoIntentGeneration);
+
         var s = _state.Snapshot();
         var newState = !s.AutoModeActive;
         _state.SetAutoModeActive(newState);
@@ -409,56 +465,78 @@ public sealed class AppController
         var haveLast = false;
         var lastWarnEmpty = DateTime.MinValue;
         var lastWarnGate = DateTime.MinValue;
+        var lastWarnPanic = DateTime.MinValue;
+        // Kept across iterations so the catch below still has a sane sleep interval
+        // even if the snapshot itself is what threw.
+        var poll = TimeSpan.FromSeconds(AppConfig.OCRInterval);
 
         while (!ct.IsCancellationRequested)
         {
-            var s = _state.Snapshot();
-            var poll = TimeSpan.FromSeconds(s.OCRInterval);
-            if (!s.AutoModeActive || s.Region == null)
+            // This runs on a bare background Thread, so an escaping exception would
+            // terminate the process rather than just failing the poll. Every branch
+            // below must stay inside this try.
+            try
             {
-                Thread.Sleep(poll);
-                continue;
-            }
-
-            if (Interlocked.Exchange(ref _autoWatcherReset, 0) == 1)
-            {
-                lastText = "";
-                haveLast = false;
-            }
-
-            var (letters, ok) = _ocr.PerformOCR(s.Region);
-            var now = DateTime.Now;
-            if (!ok || letters == "")
-            {
-                if (now - lastWarnEmpty > TimeSpan.FromSeconds(8))
+                var s = _state.Snapshot();
+                poll = TimeSpan.FromSeconds(s.OCRInterval);
+                if (!s.AutoModeActive || s.Region == null)
                 {
-                    Log("Auto mode: letter OCR is empty — check the letter region (TAB).", LogLevel.Warning);
-                    lastWarnEmpty = now;
+                    Thread.Sleep(poll);
+                    continue;
                 }
-                Thread.Sleep(poll);
-                continue;
-            }
 
-            if (!haveLast || letters != lastText)
-            {
-                var (gateOk, turnOcr) = AutoModeTurnOK();
-                if (!gateOk)
+                if (Interlocked.Exchange(ref _autoWatcherReset, 0) == 1)
                 {
-                    if (s.TurnRegion != null && now - lastWarnGate > TimeSpan.FromSeconds(8))
+                    lastText = "";
+                    haveLast = false;
+                }
+
+                var (letters, ok) = TimedOcr(s.Region);
+                var now = DateTime.Now;
+                if (!ok || letters == "")
+                {
+                    if (now - lastWarnEmpty > TimeSpan.FromSeconds(8))
                     {
-                        Log($"Auto mode: waiting for YOUR TURN (turn OCR: \"{turnOcr}\")", LogLevel.Warning);
-                        lastWarnGate = now;
+                        Log("Auto mode: letter OCR is empty — check the letter region (TAB).", LogLevel.Warning);
+                        lastWarnEmpty = now;
                     }
                     Thread.Sleep(poll);
                     continue;
                 }
-                Log($"Auto-detected: '{letters}'", LogLevel.Info);
-                lastText = letters;
-                haveLast = true;
-                Submit(() => HandleShiftAsync("auto"));
-            }
 
-            Thread.Sleep(poll);
+                if (!haveLast || letters != lastText)
+                {
+                    var (gateOk, turnOcr) = AutoModeTurnOK();
+                    if (!gateOk)
+                    {
+                        if (s.TurnRegion != null && now - lastWarnGate > TimeSpan.FromSeconds(8))
+                        {
+                            Log($"Auto mode: waiting for YOUR TURN (turn OCR: \"{turnOcr}\")", LogLevel.Warning);
+                            lastWarnGate = now;
+                        }
+                        Thread.Sleep(poll);
+                        continue;
+                    }
+                    Log($"Auto-detected: '{letters}'", LogLevel.Info);
+                    lastText = letters;
+                    haveLast = true;
+                    Submit(() => HandleShiftAsync("auto"));
+                }
+
+                Thread.Sleep(poll);
+            }
+            catch (Exception ex)
+            {
+                // Log at most once every 8s so a persistent fault can't flood the
+                // window, but always record the full trace to the log file.
+                AppLog.Errorf("panic in auto mode: {0}\n{1}", ex.Message, ex.StackTrace ?? "");
+                if (DateTime.Now - lastWarnPanic > TimeSpan.FromSeconds(8))
+                {
+                    Log($"[panic in auto mode]: {ex.Message}", LogLevel.Error);
+                    lastWarnPanic = DateTime.Now;
+                }
+                Thread.Sleep(poll);
+            }
         }
     }
 
@@ -466,7 +544,8 @@ public sealed class AppController
 
     private void ShowHelp()
     {
-        _logWin?.Synchronize(() => HelpWindow.Show(_logWin, HelpText()));
+        // Modal, same reasoning as the definition window: don't block the caller's thread.
+        _logWin?.SynchronizeAsync(() => HelpWindow.Show(_logWin, HelpText()));
     }
 
     // ---- tesseract --------------------------------------------------------------------
@@ -476,24 +555,31 @@ public sealed class AppController
         if (_ocr.Available()) return true;
 
         Log("Tesseract WBT not found.", LogLevel.Warning);
-        if (!MessageBoxes.YesNo("Tesseract Not Found", "Tesseract WBT not found. Download and install?"))
-            return false;
+        // This runs on a background task now, so marshal the prompt to the UI thread
+        // rather than opening an unowned message box off it.
+        var consent = _logWin != null
+            ? _logWin.Dispatcher.Invoke(() => MessageBoxes.YesNo("Tesseract Not Found", "Tesseract WBT not found. Download and install?"))
+            : MessageBoxes.YesNo("Tesseract Not Found", "Tesseract WBT not found. Download and install?");
+        if (!consent) return false;
 
-        Log("Downloading Tesseract...", LogLevel.Info);
+        Log("Downloading Tesseract (this can take a few minutes)...", LogLevel.Info);
         try
         {
             Downloader.DownloadFile(AppConfig.TesseractInstallerURL, AppConfig.TesseractInstallerPath);
         }
         catch (Exception ex)
         {
-            Log($"Installation failed: {ex.Message}", LogLevel.Error);
+            Log($"Download failed: {ex.Message}", LogLevel.Error);
             return false;
         }
 
         Log("Running installer...", LogLevel.Info);
         try
         {
-            using var proc = Process.Start(AppConfig.TesseractInstallerPath);
+            // UseShellExecute so an installer that requests elevation gets a UAC prompt
+            // instead of failing outright.
+            var psi = new ProcessStartInfo(AppConfig.TesseractInstallerPath) { UseShellExecute = true };
+            using var proc = Process.Start(psi);
             proc?.WaitForExit();
         }
         catch (Exception ex)
@@ -517,9 +603,6 @@ public sealed class AppController
         AppLog.Setup();
         AppLog.Infof("========== WBT STARTED ==========");
         _state.LoadState();
-
-        if (!CheckAndInstallTesseract())
-            Log("Tesseract is required for OCR features.", LogLevel.Warning);
 
         _overlay = new RegionOverlayManager();
 
@@ -548,6 +631,23 @@ public sealed class AppController
         var token = _autoModeCts.Token;
         var watcherThread = new Thread(() => AutoModeWatcher(token)) { IsBackground = true, Name = "WBT-AutoMode" };
         watcherThread.Start();
+
+        // Deliberately last, and off the UI thread. This can prompt, download ~50MB and
+        // run an installer to completion; doing it inline before logWin.Show() left the
+        // user staring at nothing while Windows marked the process "not responding".
+        Task.Run(() =>
+        {
+            try
+            {
+                if (!CheckAndInstallTesseract())
+                    Log("Tesseract is required for OCR features.", LogLevel.Warning);
+            }
+            catch (Exception ex)
+            {
+                Log($"Tesseract check failed: {ex.Message}", LogLevel.Error);
+                AppLog.Errorf("tesseract check failed: {0}\n{1}", ex.Message, ex.StackTrace ?? "");
+            }
+        });
     }
 
     private Callbacks BuildCallbacks() => new()
@@ -595,21 +695,39 @@ public sealed class AppController
     private void GracefulExit(int code)
     {
         if (Interlocked.Exchange(ref _exitingFlag, 1) == 1) return;
-        Log("Shutting down...", LogLevel.Info);
-        _state.SetAutoModeActive(false);
-        _state.SaveState();
-        _state.SaveMetrics();
 
-        _autoModeCts?.Cancel();
-        _hook.Stop();
-        _logWin?.DisposeAll();
+        // The exiting flag is latched above, so every later exit attempt returns
+        // early. If teardown throws and we never reach Environment.Exit, the app
+        // becomes impossible to quit — hence the finally.
+        try
+        {
+            Log("Shutting down...", LogLevel.Info);
+            _state.SetAutoModeActive(false);
+            _state.SaveState();
+            _state.SaveMetrics();
 
-        // Give the UI a moment to tear down.
-        Thread.Sleep(150);
-        Environment.Exit(code);
+            _autoModeCts?.Cancel();
+            _hook.Stop();
+            _logWin?.DisposeAll();
+
+            // Give the UI a moment to tear down.
+            Thread.Sleep(150);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Errorf("error during shutdown: {0}\n{1}", ex.Message, ex.StackTrace ?? "");
+        }
+        finally
+        {
+            Environment.Exit(code);
+        }
     }
 
     private int _exitingFlag;
+
+    // Bumped on every explicit auto-mode toggle; see HandleShiftPress /
+    // ResumeAutoIfStillIntended.
+    private int _autoIntentGeneration;
 
     private static int ClampIndex(int i, int n)
     {

@@ -8,6 +8,28 @@ namespace WordBombTool.Tests;
 public class ConfigTests
 {
     [Theory]
+    // Accepted: both words present, in either order, with surrounding noise.
+    [InlineData("yourturn", true)]
+    [InlineData("itsyourturn", true)]
+    [InlineData("yourturnnow", true)]
+    [InlineData("turnisyours", true)]   // "your" is a substring of "yours"
+    // Rejected: "your" alone must NOT open the gate. Before the fix the trailing
+    // `hasYour && text.Length >= 4` clause made every one of these accept, so auto
+    // mode typed out of turn on stray chat text.
+    [InlineData("your", false)]
+    [InlineData("yourmove", false)]
+    [InlineData("yours", false)]
+    [InlineData("whatsyourname", false)]
+    // Rejected: "turn" alone, and no match at all.
+    [InlineData("turn", false)]
+    [InlineData("waiting", false)]
+    [InlineData("", false)]
+    public void TurnGateAccepts_RequiresBothWords(string text, bool expected)
+    {
+        Assert.Equal(expected, AppConfig.TurnGateAccepts(text));
+    }
+
+    [Theory]
     [InlineData(0.05, AppConfig.OCRIntervalMin)]   // below min -> clamped up
     [InlineData(20.0, AppConfig.OCRIntervalMax)]   // above max -> clamped down
     [InlineData(AppConfig.OCRIntervalMin, AppConfig.OCRIntervalMin)] // exactly at min -> unchanged

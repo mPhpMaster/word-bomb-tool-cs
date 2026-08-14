@@ -231,6 +231,25 @@ public sealed class StateManager
 
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
 
+    // SaveState/SaveMetrics are called from both the UI thread and thread-pool
+    // workers. _lock only guards the in-memory snapshot, so without this a second
+    // writer hit the first one's open handle and lost its change with nothing but a
+    // log line. Separate from _lock so a slow disk never blocks state reads.
+    private static readonly object _fileLock = new();
+
+    /// <summary>Writes to a sibling .tmp file and moves it into place, so an
+    /// interrupted write (crash, Environment.Exit) can't leave a truncated file that
+    /// fails to parse on next launch and silently drops the user's saved regions.</summary>
+    private static void WriteFileAtomic(string path, string contents)
+    {
+        lock (_fileLock)
+        {
+            var tmp = path + ".tmp";
+            File.WriteAllText(tmp, contents);
+            File.Move(tmp, path, overwrite: true);
+        }
+    }
+
     public void SaveState()
     {
         PersistedConfig cfg;
@@ -250,7 +269,7 @@ public sealed class StateManager
         try
         {
             var json = JsonSerializer.Serialize(cfg, JsonOpts);
-            File.WriteAllText(AppConfig.ConfigFile, json);
+            WriteFileAtomic(AppConfig.ConfigFile, json);
             AppLog.Infof("Configuration saved");
         }
         catch (Exception ex)
@@ -329,7 +348,7 @@ public sealed class StateManager
                 ["average_api_time_ms"] = mt.AverageAPITimeMS,
                 ["session_start_time"] = mt.SessionStartTime.ToString("o"),
             };
-            File.WriteAllText(AppConfig.MetricsFile, JsonSerializer.Serialize(outObj, JsonOpts));
+            WriteFileAtomic(AppConfig.MetricsFile, JsonSerializer.Serialize(outObj, JsonOpts));
             AppLog.Infof("Metrics saved");
         }
         catch (Exception ex)

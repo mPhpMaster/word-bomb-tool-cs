@@ -16,7 +16,7 @@ process is intentionally lightweight.
    ```
 
 3. The app is Windows-only (it depends on Win32 keyboard hooks and
-   `SendInput`), so building/running the GUI and CLI requires Windows. The
+   `SendInput`), so building/running the GUI requires Windows. The
    `WordBombTool.Core` library and its tests are plain `net8.0` and are the
    easiest place to iterate if you're on a different OS.
 
@@ -25,7 +25,7 @@ process is intentionally lightweight.
 See the [README's project layout section](README.md#project-layout) for
 where things live. In short: put platform-agnostic logic in
 `src/WordBombTool.Core` (so it stays unit-testable), and keep
-`src/WordBombGui` / `src/WordBombCli` as thin as possible around it.
+`src/WordBombGui` as thin as possible around it.
 
 ## Making changes
 

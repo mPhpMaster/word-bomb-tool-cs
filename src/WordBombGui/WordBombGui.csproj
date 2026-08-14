@@ -22,7 +22,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Resource Include="Resources\appicon.png" />
+    <!-- appicon.png is kept on disk as the source art for regenerating the .ico,
+         but is deliberately NOT a <Resource>: nothing loads it at runtime, so
+         embedding it only added dead payload to every published binary. -->
     <Resource Include="Resources\appicon.ico" />
   </ItemGroup>
 

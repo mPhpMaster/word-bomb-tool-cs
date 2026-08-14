@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
-  Builds, tests, and publishes every distributable variant of Word Bomb Tool
-  into .\dist\, using the PublishProfiles under each project's Properties
+  Builds, tests, and publishes every distributable variant of the Word Bomb Tool
+  GUI into .\dist\, using the PublishProfiles under the project's Properties
   folder. Run from the repo root (where WordBombTool.sln lives).
 
 .PARAMETER SkipTests
@@ -31,7 +31,7 @@ function Invoke-Checked {
 }
 
 # Stop any running instances so publish doesn't hit a file-in-use lock.
-Get-Process WordBombGUI, WordBombCLI -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process WordBombGUI -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Milliseconds 500
 
 Invoke-Checked "Restore & build (Release)" {
@@ -53,9 +53,6 @@ $profiles = if ($Variant -eq 'All') {
 foreach ($p in $profiles) {
     Invoke-Checked "Publish GUI ($p)" {
         dotnet publish "$root\src\WordBombGui\WordBombGui.csproj" -c Release -p:PublishProfile=$p
-    }
-    Invoke-Checked "Publish CLI ($p)" {
-        dotnet publish "$root\src\WordBombCli\WordBombCli.csproj" -c Release -p:PublishProfile=$p
     }
 }
 

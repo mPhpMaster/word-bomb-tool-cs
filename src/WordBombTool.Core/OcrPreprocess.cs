@@ -34,11 +34,25 @@ public static class OcrPreprocess
     /// matching PIL's convert("L").</summary>
     public static GrayImage ToGray(Bitmap src)
     {
-        var w = src.Width;
-        var h = src.Height;
+        if (src == null) return new GrayImage(0, 0);
+
+        int w, h;
+        try
+        {
+            w = src.Width;
+            h = src.Height;
+        }
+        catch (ArgumentException)
+        {
+            return new GrayImage(0, 0);
+        }
+
         var dst = new GrayImage(w, h);
 
-        using var bmp = src.PixelFormat == PixelFormat.Format32bppArgb
+        // NOTE: deliberately not a `using` — when src is already 32bppArgb, bmp *is* src,
+        // and disposing it here would destroy the caller's bitmap. The finally block below
+        // disposes only the clone.
+        var bmp = src.PixelFormat == PixelFormat.Format32bppArgb
             ? src
             : src.Clone(new Rectangle(0, 0, w, h), PixelFormat.Format32bppArgb);
         var data = bmp.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
@@ -213,12 +227,19 @@ public static class OcrPreprocess
     /// read reliably, since Tesseract expects dark text on a light background.</summary>
     public static GrayImage PreprocessLetters(Bitmap src)
     {
-        var g = ToGray(src);
-        g = AutoContrast(g, 2);
-        g = UpscaleIfSmall(g, 260, 100);
-        g = Threshold(g, OtsuLevel(g));
-        if (MajorityDark(g)) g = Invert(g);
-        return Pad(g, 14, 255);
+        try
+        {
+            var g = ToGray(src);
+            g = AutoContrast(g, 2);
+            g = UpscaleIfSmall(g, 260, 100);
+            g = Threshold(g, OtsuLevel(g));
+            if (MajorityDark(g)) g = Invert(g);
+            return Pad(g, 14, 255);
+        }
+        catch
+        {
+            return new GrayImage(0, 0);
+        }
     }
 
     /// <summary>The softer pipeline for colored "YOUR TURN" UI: grayscale,

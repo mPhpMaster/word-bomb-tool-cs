@@ -230,7 +230,17 @@ public sealed class HotkeyHook
         lock (_lock)
         {
             // Edge detection: ignore auto-repeat while the key stays held.
-            if (_down.Contains(vk)) return;
+            if (_down.Contains(vk))
+            {
+                // ...but only trust _down when the key is *physically* still down. A
+                // low-level hook never receives key-up events that occur while the UAC
+                // secure desktop is active, and Windows can silently detach the hook if
+                // HookCallback exceeds LowLevelHooksTimeout. Either way a missed key-up
+                // used to wedge the key in _down, disabling that hotkey for the rest of
+                // the session with no diagnostic.
+                if (AsyncDown(vk)) return;
+                _down.Remove(vk);
+            }
             _down.Add(vk);
 
             var ctrl = AsyncDown(VK.Control);
