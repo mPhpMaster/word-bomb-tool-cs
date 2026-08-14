@@ -1,5 +1,6 @@
 // Wires the Word Bomb Tool GUI together: OCR, the Datamuse client, state,
 // hotkeys, typing and the WPF UI. Port of app/app_windows.go (main.py).
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Windows;
 using System.Windows.Threading;
@@ -14,7 +15,14 @@ public sealed class AppController
     private readonly DatamuseClient _api = new();
     private readonly LogQueue _queue = new(AppConfig.MaxLogQueueSize);
     private readonly HotkeyHook _hook = new();
-    private readonly SemaphoreSlim _sem = new(AppConfig.MaxWorkerThreads, AppConfig.MaxWorkerThreads);
+
+    // Work items block: first waiting for a slot, then for 4-6 seconds inside
+    // HumanTyping's Thread.Sleep chain. Running them as thread-pool items parked pool
+    // threads for that whole time, and since hotkey callbacks are *also* pool items,
+    // Ctrl+Shift+Q and Caps Lock stopped responding for seconds -- precisely when the
+    // user is trying to intervene. A fixed set of dedicated threads keeps the same
+    // MaxWorkerThreads concurrency limit while leaving the pool alone.
+    private readonly BlockingCollection<Action> _work = new(new ConcurrentQueue<Action>());
 
     private MainWindow? _logWin;
     private RegionOverlayManager? _overlay;
@@ -36,17 +44,30 @@ public sealed class AppController
 
     private void Submit(Action fn)
     {
-        _ = Task.Run(() =>
+        try { _work.Add(fn); }
+        catch (InvalidOperationException) { /* queue completed: shutting down */ }
+    }
+
+    private void StartWorkers()
+    {
+        for (var i = 0; i < AppConfig.MaxWorkerThreads; i++)
         {
-            _sem.Wait();
+            var t = new Thread(WorkerLoop) { IsBackground = true, Name = $"WBT-Worker{i}" };
+            t.Start();
+        }
+    }
+
+    private void WorkerLoop()
+    {
+        foreach (var fn in _work.GetConsumingEnumerable())
+        {
             try { fn(); }
             catch (Exception ex)
             {
                 Log($"[panic in worker]: {ex.Message}", LogLevel.Error);
-                AppLog.Errorf("panic in worker: {0}\n{1}", ex.Message, ex.StackTrace);
+                AppLog.Errorf("panic in worker: {0}\n{1}", ex.Message, ex.StackTrace ?? "");
             }
-            finally { _sem.Release(); }
-        });
+        }
     }
 
     /// <summary>Wraps a callback so an exception inside it is logged rather than
@@ -323,6 +344,11 @@ public sealed class AppController
 
     private void SelectRegion()
     {
+        // Tab is a global hotkey and the picker is modal, so pressing Tab while the
+        // picker is already open used to re-enter here through the nested message loop
+        // and stack a second picker on top of the first.
+        if (Interlocked.Exchange(ref _pickingRegion, 1) == 1) return;
+
         _logWin?.Synchronize(Safe("selectRegion", () =>
         {
             _overlay?.ShowRegion(null, null);
@@ -349,6 +375,8 @@ public sealed class AppController
             _overlay?.ShowRegion(region, turnRegion);
             _state.SaveState();
         }));
+
+        Volatile.Write(ref _pickingRegion, 0);
     }
 
     private void ClearTurnRegion()
@@ -477,9 +505,12 @@ public sealed class AppController
             // below must stay inside this try.
             try
             {
-                var s = _state.Snapshot();
-                poll = TimeSpan.FromSeconds(s.OCRInterval);
-                if (!s.AutoModeActive || s.Region == null)
+                // Scalar read, not Snapshot(): this runs every poll and only needs four
+                // fields, where Snapshot() copies both suggestion lists, rehashes a
+                // 1000-entry history set and clones Metrics.
+                var (autoActive, region, turnRegion, ocrInterval) = _state.AutoModePoll();
+                poll = TimeSpan.FromSeconds(ocrInterval);
+                if (!autoActive || region == null)
                 {
                     Thread.Sleep(poll);
                     continue;
@@ -491,7 +522,7 @@ public sealed class AppController
                     haveLast = false;
                 }
 
-                var (letters, ok) = TimedOcr(s.Region);
+                var (letters, ok) = TimedOcr(region);
                 var now = DateTime.Now;
                 if (!ok || letters == "")
                 {
@@ -509,7 +540,7 @@ public sealed class AppController
                     var (gateOk, turnOcr) = AutoModeTurnOK();
                     if (!gateOk)
                     {
-                        if (s.TurnRegion != null && now - lastWarnGate > TimeSpan.FromSeconds(8))
+                        if (turnRegion != null && now - lastWarnGate > TimeSpan.FromSeconds(8))
                         {
                             Log($"Auto mode: waiting for YOUR TURN (turn OCR: \"{turnOcr}\")", LogLevel.Warning);
                             lastWarnGate = now;
@@ -624,6 +655,7 @@ public sealed class AppController
         else
             _overlay.ShowRegion(s.Region, s.TurnRegion);
 
+        StartWorkers();
         RegisterHotkeys();
         _hook.Start();
 
@@ -707,6 +739,7 @@ public sealed class AppController
             _state.SaveMetrics();
 
             _autoModeCts?.Cancel();
+            _work.CompleteAdding(); // let the worker threads drain and exit
             _hook.Stop();
             _logWin?.DisposeAll();
 
@@ -728,6 +761,9 @@ public sealed class AppController
     // Bumped on every explicit auto-mode toggle; see HandleShiftPress /
     // ResumeAutoIfStillIntended.
     private int _autoIntentGeneration;
+
+    // 0/1 re-entrancy guard for the modal region picker; see SelectRegion.
+    private int _pickingRegion;
 
     private static int ClampIndex(int i, int n)
     {

@@ -46,7 +46,10 @@ public partial class RegionSelectorWindow : Window
         var (vx, vy, vw, vh) = Win32Interop.VirtualScreen();
 
         var hwnd = new WindowInteropHelper(this).Handle;
-        SetWindowPos(hwnd, HWND_TOPMOST, vx, vy, vw, vh, SWP_NOZORDER);
+        // No SWP_NOZORDER: that flag tells Windows to ignore hWndInsertAfter entirely,
+        // which made the HWND_TOPMOST argument a no-op (the window only ended up
+        // topmost via Topmost="True" in XAML). Matches OverlayWindow's call.
+        SetWindowPos(hwnd, HWND_TOPMOST, vx, vy, vw, vh, 0);
         SetForegroundWindow(hwnd);
         // No DPI matrix captured here on purpose: with multiple monitors at
         // different scale factors, a single scale for a window spanning the

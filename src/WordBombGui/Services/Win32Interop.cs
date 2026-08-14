@@ -2,6 +2,8 @@
 // doesn't expose directly: whole-window alpha blending that keeps native window
 // chrome (border/titlebar) intact, forced topmost, click-through, and the
 // virtual-screen bounds used by the fullscreen region selector.
+using System.Collections.Concurrent;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Media;
@@ -67,17 +69,25 @@ public static class Win32Interop
     public static Color ParseHexColor(string hex)
     {
         var s = hex.TrimStart('#');
-        if (s.Length != 6) return Colors.Black;
-        var r = Convert.ToByte(s.Substring(0, 2), 16);
-        var g = Convert.ToByte(s.Substring(2, 2), 16);
-        var b = Convert.ToByte(s.Substring(4, 2), 16);
+        // Consistent fallback: a wrong-length string already returned black, so a
+        // non-hex string of the right length shouldn't throw instead.
+        if (s.Length != 6 || !byte.TryParse(s.AsSpan(0, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var r)
+                          || !byte.TryParse(s.AsSpan(2, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var g)
+                          || !byte.TryParse(s.AsSpan(4, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var b))
+            return Colors.Black;
         return Color.FromRgb(r, g, b);
     }
 
-    public static SolidColorBrush ParseHexBrush(string hex)
-    {
-        var b = new SolidColorBrush(ParseHexColor(hex));
-        b.Freeze();
-        return b;
-    }
+    // The log view calls this once per rendered line for only three distinct colours
+    // (info/warning/error), which meant a fresh SolidColorBrush per line. Brushes are
+    // frozen, so they're safe to share across threads and reuse indefinitely.
+    private static readonly ConcurrentDictionary<string, SolidColorBrush> BrushCache = new();
+
+    public static SolidColorBrush ParseHexBrush(string hex) =>
+        BrushCache.GetOrAdd(hex, static h =>
+        {
+            var b = new SolidColorBrush(ParseHexColor(h));
+            b.Freeze();
+            return b;
+        });
 }

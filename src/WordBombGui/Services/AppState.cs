@@ -109,6 +109,16 @@ public sealed class StateManager
         }
     }
 
+    /// <summary>Cheap scalar reads for hot paths. Snapshot() copies two lists, a set
+    /// and a Metrics object; the auto-mode watcher only needs a few fields and calls it
+    /// on every poll (up to 10x/second at the minimum OCR interval).</summary>
+    public (bool autoModeActive, Region? region, Region? turnRegion, double ocrInterval) AutoModePoll()
+    {
+        lock (_lock) return (_autoModeActive, _region, _turnRegion, _ocrInterval);
+    }
+
+    public bool IsAutoModeActive() { lock (_lock) return _autoModeActive; }
+
     /// <summary>Mutation helpers — small, explicit setters instead of a Go-style
     /// "give me the struct pointer" closure, which doesn't translate cleanly to C#.</summary>
     public void SetRegions(Region? region, Region? turnRegion)
@@ -175,10 +185,21 @@ public sealed class StateManager
             _typingRecords.Add(new TypingRecord { Word = word, Timestamp = DateTime.Now, SearchTerm = searchTerm });
             _typedWordsHistory.Add(word);
             _totalTypedCount++;
+
+            // _typingRecords only ever backs Undo, which walks it from the end, so it
+            // never needed to be unbounded -- and AppConfig.UndoBufferSize was declared
+            // for exactly this but never referenced. Left uncapped it grew for the whole
+            // session and was deep-copied by every Snapshot() (i.e. on every OCR poll).
+            if (_typingRecords.Count > AppConfig.UndoBufferSize)
+                _typingRecords.RemoveRange(0, _typingRecords.Count - AppConfig.UndoBufferSize);
+
             if (_typedWordsHistory.Count > AppConfig.MaxTypedHistory)
             {
-                // Best-effort eviction, matching the original's arbitrary single-entry drop.
-                foreach (var k in _typedWordsHistory) { _typedWordsHistory.Remove(k); break; }
+                // Best-effort eviction, matching the original's arbitrary single-entry
+                // drop. Take the key out first: removing while enumerating is only safe
+                // here because of the immediate break, which is a trap for later edits.
+                var evict = _typedWordsHistory.First();
+                _typedWordsHistory.Remove(evict);
             }
         }
     }
