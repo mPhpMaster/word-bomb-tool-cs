@@ -59,11 +59,16 @@ public sealed class DatamuseClient
         var items = Get<List<WordItem>>(q);
         if (items == null) return new List<string>();
 
+        // Datamuse often returns the query itself as the top hit (e.g. "hea" for
+        // *hea*), which is not a word; never suggest the prompt letters.
+        var prompt = letters.Trim();
         var outList = new List<string>();
         foreach (var it in items)
         {
             // Keep single-word results only (no spaces), as in the original.
-            if (!string.IsNullOrWhiteSpace(it.Word) && it.Word.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries).Length == 1)
+            if (!string.IsNullOrWhiteSpace(it.Word)
+                && it.Word.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries).Length == 1
+                && !string.Equals(it.Word.Trim(), prompt, StringComparison.OrdinalIgnoreCase))
                 outList.Add(it.Word);
         }
         if (outList.Count > AppConfig.MaxSuggestionsDisplay)

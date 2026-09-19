@@ -73,13 +73,14 @@ public class DatamuseClientTests
         List<string>? result = null;
         var serverThread = new Thread(() => server.ServeOnce(
             HttpStatusCode.OK,
-            "[{\"word\":\"cat\"},{\"word\":\"cattle\"},{\"word\":\"two words\"}]"));
+            "[{\"word\":\"CAT\"},{\"word\":\"cattle\"},{\"word\":\"two words\"},{\"word\":\"catalog\"}]"));
         serverThread.Start();
         result = client.Suggestions("cat", "Starts With");
         serverThread.Join();
 
-        // Multi-word results are filtered out; single-word results pass through.
-        Assert.Equal(new[] { "cat", "cattle" }, result);
+        // Multi-word results and the prompt letters themselves (any case) are filtered
+        // out; other single-word results pass through.
+        Assert.Equal(new[] { "cattle", "catalog" }, result);
         Assert.Equal(AppConfig.StatusOnline, client.Status());
     }
 
