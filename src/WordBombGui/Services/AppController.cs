@@ -29,6 +29,19 @@ public sealed class AppController
     private int _autoWatcherReset; // 0/1 flag, single-writer/single-reader via Interlocked
     private CancellationTokenSource? _autoModeCts;
 
+    // One OCR at a time: a second caller (Shift, Alt+1, auto watcher, turn gate) waits
+    // for the running OCR to finish. Lives here rather than in OcrProcessor because
+    // _ocr is replaced after a Tesseract install.
+    private readonly object _ocrLock = new();
+    // Serializes whole OCR -> fetch -> type actions (Shift, Alt+1, auto mode) so two
+    // actions never type at once (interleaved keys like "llikike"). Later commands
+    // wait for the running one to finish.
+    private readonly object _actionLock = new();
+    // Shift actions queued or running; auto mode stays out of the way meanwhile.
+    private int _pendingManual;
+    // Letters most recently handled by any action; auto mode skips these.
+    private volatile string _lastHandledLetters = "";
+
     // ---- logging ------------------------------------------------------------
 
     private void Log(string message, LogLevel level)
@@ -89,18 +102,24 @@ public sealed class AppController
 
     private (string letters, bool ok) TimedOcr(Region region)
     {
-        var sw = Stopwatch.StartNew();
-        var result = _ocr.PerformOCR(region);
-        _state.RecordOCRAttempt(result.ok, sw.Elapsed.TotalMilliseconds);
-        return result;
+        lock (_ocrLock)
+        {
+            var sw = Stopwatch.StartNew();
+            var result = _ocr.PerformOCR(region);
+            _state.RecordOCRAttempt(result.ok, sw.Elapsed.TotalMilliseconds);
+            return result;
+        }
     }
 
     private string TimedOcrTurnGate(Region region)
     {
-        var sw = Stopwatch.StartNew();
-        var text = _ocr.PerformOCRTurnGate(region);
-        _state.RecordOCRAttempt(text != "", sw.Elapsed.TotalMilliseconds);
-        return text;
+        lock (_ocrLock)
+        {
+            var sw = Stopwatch.StartNew();
+            var text = _ocr.PerformOCRTurnGate(region);
+            _state.RecordOCRAttempt(text != "", sw.Elapsed.TotalMilliseconds);
+            return text;
+        }
     }
 
     private List<string> TimedSuggestions(string letters, string mode)
@@ -193,10 +212,18 @@ public sealed class AppController
             ResumeAutoIfStillIntended(resumeAuto, intent);
             return;
         }
+        Interlocked.Increment(ref _pendingManual);
         Submit(() =>
         {
-            try { HandleShiftAsync("shift"); }
-            finally { ResumeAutoIfStillIntended(resumeAuto, intent); }
+            try
+            {
+                lock (_actionLock) HandleShiftAsync("shift");
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _pendingManual);
+                ResumeAutoIfStillIntended(resumeAuto, intent);
+            }
         });
     }
 
@@ -209,18 +236,26 @@ public sealed class AppController
         _state.SetAutoModeActive(true);
     }
 
-    private void HandleShiftAsync(string typingSource)
+    /// <summary>Reads letters, fetches suggestions and types the first/next word.
+    /// Callers must hold _actionLock. Pass letters to reuse an OCR result already
+    /// taken, or null to OCR the region now.</summary>
+    private void HandleShiftAsync(string typingSource, string? letters = null)
     {
         var s = _state.Snapshot();
         if (s.Region == null) return;
 
         Log("Processing WBT...", LogLevel.Info);
-        var (letters, ok) = TimedOcr(s.Region);
-        if (!ok || letters == "")
+        if (string.IsNullOrEmpty(letters))
+        {
+            var (ocrLetters, ok) = TimedOcr(s.Region);
+            letters = ok ? ocrLetters : "";
+        }
+        if (letters == "")
         {
             Log("WBT returned no characters.", LogLevel.Warning);
             return;
         }
+        _lastHandledLetters = letters;
 
         s = _state.Snapshot();
         var mode = AppConfig.SearchModes[ClampIndex(s.CurrentModeIndex, AppConfig.SearchModes.Length)];
@@ -312,14 +347,21 @@ public sealed class AppController
         if (s.Region == null) return;
 
         Log("Processing WBT...", LogLevel.Info);
-        var (word, ok) = TimedOcr(s.Region);
+        // Wait for any running action; hold the lock only for OCR + fetch, not the window.
+        string word;
+        bool ok;
+        List<string> defs = new();
+        lock (_actionLock)
+        {
+            (word, ok) = TimedOcr(s.Region);
+            if (ok && word != "") defs = TimedDefinitions(word);
+        }
         if (!ok || word == "")
         {
             Log("WBT returned no definitions.", LogLevel.Warning);
             return;
         }
 
-        var defs = TimedDefinitions(word);
         _state.SetApiStatus(_api.Status());
 
         if (defs.Count > 0)
@@ -489,8 +531,6 @@ public sealed class AppController
 
     private void AutoModeWatcher(CancellationToken ct)
     {
-        var lastText = "";
-        var haveLast = false;
         var lastWarnEmpty = DateTime.MinValue;
         var lastWarnGate = DateTime.MinValue;
         var lastWarnPanic = DateTime.MinValue;
@@ -517,9 +557,13 @@ public sealed class AppController
                 }
 
                 if (Interlocked.Exchange(ref _autoWatcherReset, 0) == 1)
+                    _lastHandledLetters = "";
+
+                // A Shift action is queued/running: let it finish instead of racing it.
+                if (Volatile.Read(ref _pendingManual) > 0)
                 {
-                    lastText = "";
-                    haveLast = false;
+                    Thread.Sleep(poll);
+                    continue;
                 }
 
                 var (letters, ok) = TimedOcr(region);
@@ -535,7 +579,7 @@ public sealed class AppController
                     continue;
                 }
 
-                if (!haveLast || letters != lastText)
+                if (letters != _lastHandledLetters)
                 {
                     var (gateOk, turnOcr) = AutoModeTurnOK();
                     if (!gateOk)
@@ -548,10 +592,20 @@ public sealed class AppController
                         Thread.Sleep(poll);
                         continue;
                     }
-                    Log($"Auto-detected: '{letters}'", LogLevel.Info);
-                    lastText = letters;
-                    haveLast = true;
-                    Submit(() => HandleShiftAsync("auto"));
+                    // Run inline (not queued) so the watcher waits for typing to finish
+                    // before polling again.
+                    lock (_actionLock)
+                    {
+                        // Re-check after waiting: Shift may have paused auto mode or
+                        // already typed for these letters.
+                        if (_state.IsAutoModeActive()
+                            && Volatile.Read(ref _pendingManual) == 0
+                            && letters != _lastHandledLetters)
+                        {
+                            Log($"Auto-detected: '{letters}'", LogLevel.Info);
+                            HandleShiftAsync("auto", letters);
+                        }
+                    }
                 }
 
                 Thread.Sleep(poll);
