@@ -58,6 +58,14 @@ public static class AppConfig
     public const double OCRIntervalMax = 10.0;
     public const int OCRTimeoutSeconds = 1;
 
+    // Letter OCR is only trusted when two captures in a row agree, which filters
+    // one-off misreads of transition frames (letters animating in / fading out).
+    // Up to OCRStableAttempts captures, OCRStableGapMs apart.
+    public const int OCRStableAttempts = 5;
+    public const int OCRStableGapMs = 120;
+    // How many times one action may switch to newly read letters before giving up.
+    public const int MaxLetterChanges = 3;
+
     // Deliberately NOT OCRTimeoutSeconds. One second has to cover DNS + TCP + TLS +
     // request + response to api.datamuse.com; on a cold connection or any link with
     // >250ms RTT that expires routinely, and the user just sees an empty suggestion

@@ -12,6 +12,8 @@ public static class InputSimulator
     private const uint KeyEventScancode = 0x0008;
     private const ushort ScanEnter = 0x1C; // hardware scan code for the Enter key
     private const ushort VkReturn = 0x0D;
+    private const ushort ScanBackspace = 0x0E;
+    private const ushort VkBack = 0x08;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct KEYBDINPUT
@@ -81,6 +83,16 @@ public static class InputSimulator
         var up = new INPUT { type = InputKeyboard, ki = new KEYBDINPUT { wVk = VkReturn, wScan = ScanEnter, dwFlags = KeyEventScancode | KeyEventKeyUp } };
         Send(down);
         Thread.Sleep(25);
+        Send(up);
+    }
+
+    /// <summary>Presses and releases Backspace (virtual-key + scan code, like PressEnter).</summary>
+    public static void PressBackspace()
+    {
+        var down = new INPUT { type = InputKeyboard, ki = new KEYBDINPUT { wVk = VkBack, wScan = ScanBackspace, dwFlags = KeyEventScancode } };
+        var up = new INPUT { type = InputKeyboard, ki = new KEYBDINPUT { wVk = VkBack, wScan = ScanBackspace, dwFlags = KeyEventScancode | KeyEventKeyUp } };
+        Send(down);
+        Thread.Sleep(20);
         Send(up);
     }
 }

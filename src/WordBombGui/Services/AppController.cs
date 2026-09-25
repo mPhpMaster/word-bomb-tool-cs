@@ -111,6 +111,33 @@ public sealed class AppController
         }
     }
 
+    /// <summary>Letter OCR that only trusts a reading seen on two captures in a row.
+    /// A single capture can land on a transition frame and misread letters that are
+    /// not really on screen. Returns "" when no two consecutive readings agree.</summary>
+    private string StableOcr(Region region)
+    {
+        var (prev, ok) = TimedOcr(region);
+        if (!ok) prev = "";
+        for (var i = 1; i < AppConfig.OCRStableAttempts; i++)
+        {
+            Thread.Sleep(AppConfig.OCRStableGapMs);
+            var (cur, curOk) = TimedOcr(region);
+            if (!curOk) cur = "";
+            if (cur != "" && cur == prev) return cur;
+            prev = cur;
+        }
+        return "";
+    }
+
+    /// <summary>Re-reads the letters; returns the new letters if they differ from
+    /// <paramref name="expected"/>, otherwise null.</summary>
+    private string? LettersChanged(Region? region, string expected)
+    {
+        if (region == null || string.IsNullOrEmpty(expected)) return null;
+        var current = StableOcr(region);
+        return current != "" && current != expected ? current : null;
+    }
+
     private string TimedOcrTurnGate(Region region)
     {
         lock (_ocrLock)
@@ -238,7 +265,8 @@ public sealed class AppController
 
     /// <summary>Reads letters, fetches suggestions and types the first/next word.
     /// Callers must hold _actionLock. Pass letters to reuse an OCR result already
-    /// taken, or null to OCR the region now.</summary>
+    /// taken, or null to OCR the region now. If the letters on screen change before
+    /// the word is submitted, the stale word is dropped and the new letters are used.</summary>
     private void HandleShiftAsync(string typingSource, string? letters = null)
     {
         var s = _state.Snapshot();
@@ -246,25 +274,34 @@ public sealed class AppController
 
         Log("Processing WBT...", LogLevel.Info);
         if (string.IsNullOrEmpty(letters))
-        {
-            var (ocrLetters, ok) = TimedOcr(s.Region);
-            letters = ok ? ocrLetters : "";
-        }
+            letters = StableOcr(s.Region);
         if (letters == "")
         {
             Log("WBT returned no characters.", LogLevel.Warning);
             return;
         }
+
+        for (var i = 0; i <= AppConfig.MaxLetterChanges; i++)
+        {
+            var newLetters = HandleLetters(letters, typingSource, s.Region);
+            if (newLetters == null) return;
+            Log($"Letters changed on screen: '{letters}' -> '{newLetters}' (using new letters).", LogLevel.Info);
+            letters = newLetters;
+        }
+        Log("Letters keep changing on screen; skipped.", LogLevel.Warning);
+    }
+
+    /// <summary>Suggests and types a word for <paramref name="letters"/>; returns the
+    /// new letters if they changed on screen before the word was submitted.</summary>
+    private string? HandleLetters(string letters, string typingSource, Region region)
+    {
         _lastHandledLetters = letters;
 
-        s = _state.Snapshot();
+        var s = _state.Snapshot();
         var mode = AppConfig.SearchModes[ClampIndex(s.CurrentModeIndex, AppConfig.SearchModes.Length)];
 
         if (letters == s.LastOCRText && s.Suggestions.Count > 0)
-        {
-            TypeNextWord(typingSource);
-            return;
-        }
+            return TypeNextWord(typingSource, region);
 
         _state.SetLastOcrText(letters);
         Log($"--- WBT: {letters} ---", LogLevel.Info);
@@ -293,23 +330,26 @@ public sealed class AppController
                 Log($"No suggestions: API {status} (letters: '{letters}').", LogLevel.Warning);
         }
 
-        TypeNextWord(typingSource);
+        return TypeNextWord(typingSource, region);
     }
 
-    private void TypeNextWord(string typingSource)
+    /// <summary>Types the next untyped suggestion. With a region, the letters are
+    /// re-read before typing and before Enter; if they changed, the word is not
+    /// submitted (erased if already typed) and the new letters are returned.</summary>
+    private string? TypeNextWord(string typingSource, Region? region = null)
     {
         var s = _state.Snapshot();
         if (s.Suggestions.Count == 0)
         {
             Log("No suggestions loaded.", LogLevel.Warning);
-            return;
+            return null;
         }
 
         var (word, nextIdx) = SuggestionLogic.NextUntyped(s.Suggestions, s.SuggestionIndex, s.TypedWordsHistory);
         if (word == "")
         {
             Log("All available suggestions have been typed.", LogLevel.Warning);
-            return;
+            return null;
         }
 
         // "Thinking" pause before typing (auto slightly longer than Shift).
@@ -317,14 +357,31 @@ public sealed class AppController
             ? HumanTyping.Uniform(0.52, 1.12)
             : HumanTyping.Uniform(0.3, 0.72));
 
+        var changed = LettersChanged(region, s.LastOCRText);
+        if (changed != null) return changed;
+
         Log($"Typing: '{word}'", LogLevel.Info);
         var scale = typingSource == "auto" ? 1.32 : 1.22;
         HumanTyping.TypeWordHumanLike(word, s.TypingDelay, scale);
         HumanTyping.SleepSeconds(HumanTyping.Uniform(0.26, 0.62));
+
+        changed = LettersChanged(region, s.LastOCRText);
+        if (changed != null)
+        {
+            Log($"Erasing '{word}' (letters changed before Enter).", LogLevel.Info);
+            foreach (var _ in word)
+            {
+                InputSimulator.PressBackspace();
+                HumanTyping.SleepSeconds(HumanTyping.Uniform(0.03, 0.08));
+            }
+            return changed;
+        }
+
         InputSimulator.PressEnter();
 
         _state.AddTypingRecord(word, s.LastOCRText);
         _state.SetSuggestionIndex(nextIdx);
+        return null;
     }
 
     // ---- alt+1 (definitions) -------------------------------------------------
@@ -353,8 +410,9 @@ public sealed class AppController
         List<string> defs = new();
         lock (_actionLock)
         {
-            (word, ok) = TimedOcr(s.Region);
-            if (ok && word != "") defs = TimedDefinitions(word);
+            word = StableOcr(s.Region);
+            ok = word != "";
+            if (ok) defs = TimedDefinitions(word);
         }
         if (!ok || word == "")
         {
@@ -581,6 +639,13 @@ public sealed class AppController
 
                 if (letters != _lastHandledLetters)
                 {
+                    // Confirm on consecutive captures so a one-off misread is never typed.
+                    letters = StableOcr(region);
+                    if (letters == "" || letters == _lastHandledLetters)
+                    {
+                        Thread.Sleep(poll);
+                        continue;
+                    }
                     var (gateOk, turnOcr) = AutoModeTurnOK();
                     if (!gateOk)
                     {
