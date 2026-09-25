@@ -6,7 +6,7 @@
 ; Output lands in dist\installer\WordBombTool-Setup.exe.
 
 #define MyAppName "Word Bomb Tool"
-#define MyAppVersion "1.1.1"
+#define MyAppVersion "1.1.2"
 #define MyAppPublisher "Word Bomb Tool"
 #define MyAppExeName "WordBombGUI.exe"
 ; Path to this script is installer\WordBombTool.iss, so ..\ is the repo root.
